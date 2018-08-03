@@ -1,4 +1,5 @@
 
+
 contract POD_Digital{
 string public TermsIPFS_Hash;//Terms and conditions agreement IPFS Hash
 address public attestaionAuthority; //party that attested the smart contract
@@ -146,8 +147,7 @@ function ConfirmFileServerResult(bool result) NotFileServer NotArbitrator NotOwn
         if(result){//customer is right , customer faced an issue
             customerCouldNotDownload(customer, "Customer should be refunded");
             customer.transfer(docprice+collateral);//refund customer
-            fileserver.transfer(collateral);//refund only half collateral to fileserver
-            owner.transfer(collateral);//refund owner
+            fileserver.transfer(collateral);//refund
             refundDone(customer);
             customers[customer].state = customerState.TransactionCompleted;
         }
@@ -162,7 +162,7 @@ function ConfirmFileServerResult(bool result) NotFileServer NotArbitrator NotOwn
      uint x = docprice/2;
       uint ospay = collateral + x;
         fileserver.transfer(ospay);//pay fileserver
-            owner.transfer(ospay);//pay owner
+            owner.transfer(x);//pay owner
             customer.transfer(collateral);//pay customer
             paymentSettled(customer, "Payment just done successfully");
             customers[customer].state = customerState.TransactionCompleted;
