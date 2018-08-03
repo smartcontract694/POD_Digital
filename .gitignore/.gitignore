@@ -1,0 +1,171 @@
+
+contract POD_Digital{
+string public TermsIPFS_Hash;//Terms and conditions agreement IPFS Hash
+address public attestaionAuthority; //party that attested the smart contract
+address public arbitrator;
+address public owner;
+address public fileserver;
+enum contractState { WaitingforCustomer, Aborted}
+contractState public state; 
+enum customerState {CustomerDeposited,   FileServerDeposited, ReceivedHashandToken, DownloadConfirmedbyServer,
+                    SuccessfulDownload, Unsatisfied, Dispute, customerMistake, TransactionCompleted, Refunded  }
+uint numberOfCustomers;
+uint numberOfSuccessfulSales;
+uint validity = 2;//2 days
+
+struct Customer {
+  customerState state;
+  bool customerDownloadResult;
+  bytes32 token;
+}
+
+mapping (address => Customer) public customers;//every ethereum address points to a structure of type customer
+uint public collateral;
+uint public docprice;
+string dochash;
+modifier NotOwner(){
+    require(msg.sender != owner);
+    _;
+}
+
+modifier NotFileServer(){
+    require(msg.sender != fileserver);
+    _;
+}
+
+modifier NotArbitrator(){
+    require(msg.sender != arbitrator);
+    _;
+}
+
+modifier customerCosts(){
+    require(msg.value == docprice+collateral);
+    _;
+}
+
+modifier OnlyOwner(){
+    require(msg.sender == owner);
+    _;
+}
+
+modifier OnlyFileServer(){
+    require(msg.sender == fileserver);
+    _;
+}
+
+modifier OnlyArbitrator(){
+    require(msg.sender == arbitrator);
+    _;
+}
+modifier FSCosts(){
+    require(msg.value == collateral);
+    _;
+}
+//constructor
+function POD_Digital(){
+     owner = 0xca35b7d915458ef540ade6068dfe2f44e8fa733c;
+     fileserver = 0x14723a09acff6d2a60dcdf7aa4aff308fddc160c;
+     arbitrator = 0xdd870fa1b7c4700f2bd7f44238821c26f7392148;
+     state = contractState.WaitingforCustomer;//contract is created
+     collateral = 2 ether;//fixed collateral
+     docprice = 1 ether;
+     dochash = "rgrg";
+     TermsIPFS_Hash = "QmWXRSuPMS6aXCbZKpEjPHPUZN2NjB3YrhJTHsV4X3vb2td";
+     attestaionAuthority = 0x73c174743e6f03ec57bee663413dcb7f49caf524;
+     numberOfSuccessfulSales = 0;
+     numberOfCustomers = 0;
+    }
+event customerDepositedandPaid(address customer, string info);  
+event fileserverDepositedCollateral(string info,address customer);
+event tokenCreatedForCustomer(address customer, bytes32 token, uint timestamp, uint duration);
+event customerDownloadedDigitalContentfromFileServer(address cutsomer, string info);
+event successfulTransactionCustomerSatisfied(address customer);
+event unsuccessfulTransactionCustomerUnsatisfied(address customer);
+event arbitratorIsVerifyingforCustomer(address customer, string info, bytes32 token);
+event customerCouldNotDownload(address customer, string info);
+event cutomerMistake(address customer, string info);
+event refundDone(address customer);
+event paymentSettled(address customer, string info);
+event RefundBasedOnCustomerRequest(string info, address customer);
+
+function GetDocument() NotOwner NotFileServer NotArbitrator customerCosts payable{//customer deposits collateral and pays
+     require(state == contractState.WaitingforCustomer);
+     customers[msg.sender].state = customerState.CustomerDeposited;
+     customerDepositedandPaid(msg.sender, "Customer deposited collateral and paid for document");
+     numberOfCustomers++;//increase the number of customers
+    }    
+
+function PayCollateral(address customer) FSCosts payable{//file server deposits collateral
+    require(msg.sender == fileserver);
+    if(customers[customer].state == customerState.CustomerDeposited){
+      fileserverDepositedCollateral("Transaction with the customer ", customer);
+      customers[customer].state = customerState.FileServerDeposited;
+      GenerateToken(customer, validity, dochash);
+    }
+}
+
+function refund()NotArbitrator NotFileServer NotOwner{//only a customer
+    require(customers[msg.sender].state == customerState.CustomerDeposited);
+    uint x = collateral+docprice;
+    msg.sender.transfer(x);
+    customers[msg.sender].state = customerState.Refunded;
+    RefundBasedOnCustomerRequest("customer has been refunded", msg.sender);
+}
+
+function GenerateToken(address customer, uint validity, string filehash) internal{
+      require(customers[customer].state == customerState.FileServerDeposited);
+      bytes32 token = keccak256(customer, validity, numberOfCustomers, numberOfSuccessfulSales, block.timestamp);//unique token for each customer
+      customers[customer].token = token;
+      tokenCreatedForCustomer(customer, token, block.timestamp, validity);
+      customers[customer].state = customerState.ReceivedHashandToken;//the customer would also receive the hash and token 
+}
+    
+function ProvideCustomerDownloadResult(address customer) OnlyFileServer{//this will only be called if customer downloaded the didigtal content
+    require(customers[customer].state == customerState.ReceivedHashandToken);
+    customerDownloadedDigitalContentfromFileServer(customer, "Customer Done Download");
+    customers[customer].state = customerState.DownloadConfirmedbyServer;
+    }
+    
+function ConfirmFileServerResult(bool result) NotFileServer NotArbitrator NotOwner{//only customer
+      require (customers[msg.sender].state == customerState.DownloadConfirmedbyServer);
+      if(result)
+      {
+          successfulTransactionCustomerSatisfied(msg.sender);
+          customers[msg.sender].state = customerState.SuccessfulDownload;
+          settlepayment(msg.sender);
+      }
+      else{//customer unsatisfied
+          unsuccessfulTransactionCustomerUnsatisfied(msg.sender);
+          customers[msg.sender].state = customerState.Unsatisfied;
+          arbitratorIsVerifyingforCustomer(msg.sender, "Token: ", customers[msg.sender].token);
+      }
+        
+    }
+    function SettleDisputeAndPayment(address customer, bool result) OnlyArbitrator{
+        require(customers[customer].state == customerState.Unsatisfied);
+        if(result){//customer is right , customer faced an issue
+            customerCouldNotDownload(customer, "Customer should be refunded");
+            customer.transfer(docprice+collateral);//refund customer
+            fileserver.transfer(collateral);//refund only half collateral to fileserver
+            owner.transfer(collateral);//refund owner
+            refundDone(customer);
+            customers[customer].state = customerState.TransactionCompleted;
+        }
+        else{//customer is wrong
+            cutomerMistake(customer, "There are no problems in dowloading digital content");
+            settlepayment(customer);
+            
+        }
+    }
+    function settlepayment(address customer) internal{
+        require(customers[customer].state == customerState.SuccessfulDownload || customers[customer].state == customerState.customerMistake);
+     uint x = docprice/2;
+      uint ospay = collateral + x;
+        fileserver.transfer(ospay);//pay fileserver
+            owner.transfer(ospay);//pay owner
+            customer.transfer(collateral);//pay customer
+            paymentSettled(customer, "Payment just done successfully");
+            customers[customer].state = customerState.TransactionCompleted;
+    }
+    
+}
